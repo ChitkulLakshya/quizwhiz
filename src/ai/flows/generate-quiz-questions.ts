@@ -1,5 +1,3 @@
-'use server';
-
 /**
  * @fileOverview This file defines a Genkit flow for generating quiz questions based on a subject and skill level.
  *
@@ -19,12 +17,16 @@ const GenerateQuizQuestionsInputSchema = z.object({
   skillLevel: z
     .string()
     .describe(
-      'The skill level of the quiz questions (e.g., beginner, intermediate, advanced).'
+      'The skill level of the quiz questions (e.g., easy, normal, hard).'
     ),
   numberOfQuestions: z
     .number()
     .describe('The number of questions to generate.')
-    .default(5),
+    .default(10),
+  image: z
+    .string()
+    .optional()
+    .describe('Base64 encoded image data (data:image/...) to generate questions from.'),
 });
 
 export type GenerateQuizQuestionsInput = z.infer<
@@ -51,45 +53,48 @@ export async function generateQuizQuestions(
   return generateQuizQuestionsFlow(input);
 }
 
-const generateQuizQuestionsPrompt = ai.definePrompt({
-  name: 'generateQuizQuestionsPrompt',
-  input: {schema: GenerateQuizQuestionsInputSchema},
-  output: {schema: GenerateQuizQuestionsOutputSchema},
-  prompt: `You are a quiz generator expert. Generate multiple-choice quiz questions based on the provided subject and skill level. The number of questions should be equal to numberOfQuestions.
-
-Subject: {{{subject}}}
-Skill Level: {{{skillLevel}}}
-Number of Questions: {{{numberOfQuestions}}}
-
-Each question should have four options, one of which is the correct answer. Return the questions in JSON format as specified in the output schema.  The schema descriptions should be used to guide the structure of the JSON. Return a JSON array of questions. Each question object must contain a question (string), options (array of strings), and correctAnswer (string; must match one of the options). Ensure the questions and options are appropriate for the specified skill level. Do NOT include any introductory or concluding remarks.  Just the JSON.
-
-For example:
-
-{
-  "questions": [
-    {
-      "question": "What is the capital of France?",
-      "options": ["Berlin", "Madrid", "Paris", "Rome"],
-      "correctAnswer": "Paris"
-    },
-    {
-      "question": "What is the value of Pi to two decimal places?",
-      "options": ["3.14", "3.15", "3.16", "3.17"],
-      "correctAnswer": "3.14"
-    }
-  ]
-}
-`,
-});
-
 const generateQuizQuestionsFlow = ai.defineFlow(
   {
     name: 'generateQuizQuestionsFlow',
     inputSchema: GenerateQuizQuestionsInputSchema,
     outputSchema: GenerateQuizQuestionsOutputSchema,
   },
-  async input => {
-    const {output} = await generateQuizQuestionsPrompt(input);
-    return output!;
+  async (input) => {
+    const promptText = `You are an expert quiz creator. Your task is to generate high-quality multiple-choice questions based on the provided subject${input.image ? ', the attached image,' : ''} and skill level.
+
+Subject: ${input.subject}
+Skill Level: ${input.skillLevel}
+Number of Questions: ${input.numberOfQuestions}
+
+Guidelines:
+1. **Source Material**: ${input.image ? 'Analyze the attached image thoroughly. Generate questions based on visual details, text, charts, or concepts presented in the image. If the image is not sufficient for all questions, supplement with general knowledge about the Subject.' : 'Generate questions based on the Subject.'}
+2. **Diversity**: Ensure questions cover different aspects and vary in style (e.g., definitions, applications, problem-solving). Avoid repetition.
+3. **Distractors**: The wrong options (distractors) must be plausible and related to the context. Avoid obviously incorrect or silly answers.
+4. **Difficulty**:
+   - If Skill Level is 'hard', questions should require deep reasoning, analysis, or synthesis of concepts.
+   - If Skill Level is 'easy', focus on fundamental concepts and definitions.
+   - If Skill Level is 'normal', balance between recall and application.
+5. **Format**: Strictly follow the output JSON schema.
+   - Each question must have exactly 4 options.
+   - 'correctAnswer' must be an exact string match to one of the 'options'.
+   - Do NOT include any markdown formatting, introductory text, or explanations. Return ONLY the raw JSON object.
+`;
+
+    const promptParts: any[] = [{ text: promptText }];
+    
+    if (input.image) {
+      promptParts.push({ media: { url: input.image } });
+    }
+
+    const { output } = await ai.generate({
+      prompt: promptParts,
+      output: { schema: GenerateQuizQuestionsOutputSchema },
+    });
+
+    if (!output) {
+      throw new Error('Failed to generate questions');
+    }
+
+    return output;
   }
 );

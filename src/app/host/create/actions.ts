@@ -7,6 +7,8 @@ import { redirect } from 'next/navigation';
 import { collection, addDoc, serverTimestamp, doc, setDoc } from 'firebase/firestore';
 import { db } from '@/firebase';
 import { v4 as uuidv4 } from 'uuid';
+import { addQuestions } from '@/lib/firebase-service';
+import { Question } from '@/types/quiz';
 
 const generateQuestionsSchema = z.object({
   subject: z.string().min(3, 'Subject must be at least 3 characters long.'),
@@ -24,6 +26,8 @@ export async function generateQuestionsAction(
   prevState: GenerateQuestionsState,
   formData: FormData
 ): Promise<GenerateQuestionsState> {
+  console.log('🤖 generateQuestionsAction started');
+  
   const validatedFields = generateQuestionsSchema.safeParse({
     subject: formData.get('subject'),
     skillLevel: formData.get('skillLevel'),
@@ -31,15 +35,20 @@ export async function generateQuestionsAction(
   });
 
   if (!validatedFields.success) {
+    console.log('❌ Validation failed:', validatedFields.error.flatten());
     return {
       status: 'error',
       message: validatedFields.error.flatten().fieldErrors.subject?.[0] || 'Invalid input.',
     };
   }
 
+  console.log('✅ Input validated, calling AI...', validatedFields.data);
+
   try {
     const result = await generateQuizQuestions(validatedFields.data);
-    if (result && result.questions) {
+    console.log('✅ AI response received');
+    
+    if (result && result.questions && result.questions.length > 0) {
       // The AI returns correctAnswer, but the form needs correctAnswerIndex.
       const questionsWithIndex = result.questions.map(q => {
         const correctAnswerIndex = q.options.indexOf(q.correctAnswer);
@@ -60,13 +69,22 @@ export async function generateQuestionsAction(
         })),
       };
     } else {
-      throw new Error('AI did not return any questions.');
+      throw new Error('AI returned an empty list of questions.');
     }
-  } catch (error) {
-    console.error(error);
+  } catch (error: any) {
+    console.error('AI Generation Error:', error);
+    
+    let errorMessage = 'Failed to generate questions. Please try again.';
+    
+    if (error.message?.includes('429') || error.message?.includes('Resource has been exhausted')) {
+      errorMessage = 'AI service is currently busy (Rate Limit Reached). Please wait a moment and try again.';
+    } else if (error.message?.includes('empty list')) {
+      errorMessage = 'The AI could not generate questions for this topic. Try a different subject.';
+    }
+
     return {
       status: 'error',
-      message: 'Failed to generate questions. Please try again.',
+      message: errorMessage,
     };
   }
 }
@@ -127,30 +145,20 @@ export async function createQuizAction(formData: FormData): Promise<CreateQuizRe
     // Log the created document ID for debugging
     console.log('Quiz created successfully with ID:', quizId);
 
-    // Add questions to the questions subcollection
-    for (let i = 0; i < questions.length; i++) {
-      const questionData = questions[i];
-      const questionId = quizData.questionIds[i];
-      
-      // The form gives us the option text as the `correctAnswer`. We need the index.
-      const correctAnswerIndex = questionData.options.indexOf(questionData.correctAnswer);
-
-      const questionPayload = {
-        id: questionId,
-        quizId: quizId,
-        text: questionData.question,
-        options: questionData.options,
-        correctAnswerIndex: correctAnswerIndex,
-        timer: questionData.timeLimit,
-        createdAt: serverTimestamp(),
+    // Add questions to the questions subcollection using batch write
+    const questionsToAdd: Omit<Question, 'id' | 'quizId'>[] = questions.map((q, i) => {
+      const correctAnswerIndex = q.options.indexOf(q.correctAnswer);
+      return {
+        questionText: q.question,
+        options: q.options,
+        correctOptionIndex: correctAnswerIndex >= 0 ? correctAnswerIndex : 0,
+        timeLimit: q.timeLimit,
+        order: i,
+        points: 100, // Default points
       };
+    });
 
-      // Use addDoc for questions subcollection
-      await addDoc(
-        collection(db, 'quizzes', quizId, 'questions'),
-        questionPayload
-      );
-    }
+    await addQuestions(quizId, questionsToAdd);
 
     // Revalidate the path after successful creation
     revalidatePath('/');

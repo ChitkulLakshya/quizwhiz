@@ -22,6 +22,7 @@ import {
   type DocumentReference,
   type CollectionReference,
   type FieldValue,
+  writeBatch,
 } from "firebase/firestore";
 
 import { db } from "@/firebase";
@@ -145,7 +146,7 @@ export const getQuiz = async (quizId: string): Promise<Quiz | null> => {
       const quiz = {
         ...data,
         id: snap.id,
-        createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toMillis() : Date.now(),
+        createdAt: (data.createdAt as any) instanceof Timestamp ? (data.createdAt as any).toMillis() : Date.now(),
       } as Quiz;
       console.log("✅ Quiz found:", quiz.title);
       return quiz;
@@ -185,7 +186,7 @@ export const getQuizByCode = async (code: string): Promise<Quiz | null> => {
     const quiz = {
       ...data,
       id: doc.id,
-      createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toMillis() : Date.now(),
+      createdAt: (data.createdAt as any) instanceof Timestamp ? (data.createdAt as any).toMillis() : Date.now(),
     } as Quiz;
     
     console.log("✅ Quiz found by code:", quiz.title);
@@ -278,6 +279,38 @@ export const addQuestion = async (
     return docRef.id;
   } catch (error) {
     console.error("❌ Error adding question:", error);
+    throw error;
+  }
+};
+
+/**
+ * Add multiple questions to a quiz in a batch
+ * @param quizId - The quiz document ID
+ * @param questionsData - Array of question data (without id and quizId)
+ */
+export const addQuestions = async (
+  quizId: string,
+  questionsData: Omit<Question, "id" | "quizId">[]
+): Promise<void> => {
+  try {
+    console.log(`➕ Adding ${questionsData.length} questions to quiz:`, quizId);
+    
+    const batch = writeBatch(db);
+    const questionsRef = collection(db, "quizzes", quizId, "questions");
+
+    questionsData.forEach((data) => {
+      const newDocRef = doc(questionsRef); // Generate a new ID
+      const questionData: Omit<Question, "id"> = {
+        ...data,
+        quizId,
+      };
+      batch.set(newDocRef, questionData);
+    });
+
+    await batch.commit();
+    console.log("✅ Batch questions added successfully");
+  } catch (error) {
+    console.error("❌ Error adding batch questions:", error);
     throw error;
   }
 };
@@ -451,7 +484,7 @@ export const subscribeToQuiz = (
       const quiz = {
         ...data,
         id: snap.id,
-        createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toMillis() : Date.now(),
+        createdAt: (data.createdAt as any) instanceof Timestamp ? (data.createdAt as any).toMillis() : Date.now(),
       } as Quiz;
       console.log("📡 Quiz update received:", quiz.title);
       callback(quiz);
