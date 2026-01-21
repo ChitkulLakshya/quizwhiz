@@ -1,4 +1,4 @@
-# QuizWhiz
+# Quiz
 
 QuizWhiz is a real-time, serverless quiz platform designed to facilitate interactive events and classroom assessments. It allows administrators to create custom quizzes, manage live sessions, and synchronize game state across hundreds of participant devices instantly, providing immediate feedback and dynamic leaderboards without requiring participant account creation.
 
